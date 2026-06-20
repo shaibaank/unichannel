@@ -1,0 +1,121 @@
+// OmniInbox Prisma schema
+// Docs: https://www.prisma.io/docs
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Channel {
+  WHATSAPP
+  EMAIL
+  SMS
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+  PENDING
+  SNOOZED
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+}
+
+enum SentBy {
+  HUMAN
+  BOT
+  AGENT
+}
+
+enum Role {
+  ADMIN
+  AGENT
+}
+
+model Contact {
+  id            String         @id @default(cuid())
+  name          String?
+  phone         String?        @unique
+  email         String?        @unique
+  createdAt     DateTime       @default(now())
+  conversations Conversation[]
+
+  @@map("contacts")
+}
+
+model Conversation {
+  id         String             @id @default(cuid())
+  contactId  String
+  contact    Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel    Channel
+  status     ConversationStatus @default(OPEN)
+  assignedTo String?
+  summary    String?
+  sentiment  String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  messages   Message[]
+  tags       Tag[]              @relation("ConversationTags")
+
+  @@unique([contactId, channel])
+  @@index([status])
+  @@index([channel])
+  @@index([assignedTo])
+  @@index([updatedAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      Direction
+  body           String
+  mediaUrl       String?
+  sentBy         SentBy
+  timestamp      DateTime     @default(now())
+  metadata       Json?
+  // Raw channel message id — enforces webhook idempotency.
+  externalId     String?      @unique
+
+  @@index([conversationId, timestamp])
+  @@map("messages")
+}
+
+model Tag {
+  id            String         @id @default(cuid())
+  name          String         @unique
+  conversations Conversation[] @relation("ConversationTags")
+
+  @@map("tags")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(AGENT)
+  createdAt    DateTime @default(now())
+
+  @@map("users")
+}
+
+// Singleton row (id = "singleton") holding operator-tunable settings.
+model Setting {
+  id              String   @id @default("singleton")
+  autoReplyEnabled Boolean @default(false)
+  llmSystemPrompt String   @default("You are a helpful customer support agent. Be concise, friendly, and professional.")
+  whatsappEnabled Boolean  @default(true)
+  emailEnabled    Boolean  @default(true)
+  smsEnabled      Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+
+  @@map("settings")
+}

@@ -1,0 +1,29 @@
+{
+  "name": "omniinbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted open-source omnichannel customer operations platform (WhatsApp, Email, SMS).",
+  "scripts": {
+    "backend": "pnpm --filter @omniinbox/backend",
+    "frontend": "pnpm --filter @omniinbox/frontend",
+    "dev:backend": "pnpm --filter @omniinbox/backend dev",
+    "dev:frontend": "pnpm --filter @omniinbox/frontend dev",
+    "build": "pnpm -r build",
+    "prisma:migrate": "pnpm --filter @omniinbox/backend prisma:migrate",
+    "prisma:generate": "pnpm --filter @omniinbox/backend prisma:generate"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "msgpackr-extract",
+      "sharp"
+    ]
+  },
+  "packageManager": "pnpm@10.33.0"
+}
