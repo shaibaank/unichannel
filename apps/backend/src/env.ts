@@ -42,6 +42,9 @@ const schema = z.object({
   EMAIL_PASS: z.string().optional(),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),
+  // If set, only inbound emails containing this keyword (subject or body)
+  // are ingested — used to filter junk from a shared/personal inbox.
+  EMAIL_FILTER_KEYWORD: z.string().default(""),
 
   // Twilio (optional)
   TWILIO_ACCOUNT_SID: z.string().optional(),

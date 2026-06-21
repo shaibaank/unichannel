@@ -119,3 +119,15 @@ model Setting {
 
   @@map("settings")
 }
+
+// RAG knowledge base. `embedding` stores the chunk's float vector as JSON;
+// similarity search is done in the service layer (cosine).
+model KnowledgeChunk {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  embedding Json
+  createdAt DateTime @default(now())
+
+  @@map("knowledge_chunks")
+}

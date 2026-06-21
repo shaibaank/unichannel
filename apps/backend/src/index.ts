@@ -4,6 +4,7 @@ import { buildApp } from "./app.js";
 import { setIO } from "./lib/socket.js";
 import { startWorker } from "./queue/worker.js";
 import { startImapPolling } from "./services/channels/email.js";
+import { seedKnowledgeBase } from "./services/rag.js";
 
 async function main() {
   const app = await buildApp();
@@ -23,6 +24,11 @@ async function main() {
   // Background workers.
   startWorker((m) => app.log.info(m));
   startImapPolling((m) => app.log.info(m));
+
+  // Seed the RAG knowledge base (non-blocking; embeds the mock KB).
+  seedKnowledgeBase((m) => app.log.info(m)).catch((err) =>
+    app.log.error(`[rag] seed failed: ${err.message}`),
+  );
 
   await app.listen({ port: env.BACKEND_PORT, host: "0.0.0.0" });
   app.log.info(`OmniInbox backend listening on :${env.BACKEND_PORT}`);

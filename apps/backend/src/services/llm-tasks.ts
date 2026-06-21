@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { emitConversationUpdated, emitEscalationNeeded } from "../lib/socket.js";
 import { getSystemPrompt } from "./settings.js";
 import { sendReply } from "./sender.js";
+import { retrieve } from "./rag.js";
 
 export type Sentiment = "POSITIVE" | "NEUTRAL" | "NEGATIVE";
 export type Intent = "SUPPORT" | "SALES" | "COMPLAINT" | "GENERAL";
@@ -35,7 +36,10 @@ async function getRecentMessages(
 function toChatTranscript(messages: ContextMessage[]): string {
   return messages
     .map(
-      (m) => `${m.direction === "INBOUND" ? "Customer" : "Agent"}: ${m.body}`,
+      (m) =>
+        `${m.direction === "INBOUND" ? "Customer" : "Agent"}: ${m.body
+          .slice(0, 800)
+          .trim()}`,
     )
     .join("\n");
 }
@@ -112,44 +116,95 @@ export async function runClassifyJob(conversationId: string) {
     select: { id: true },
   });
 
+  // Raise an escalation alert for urgent messages (handled here so auto-reply
+  // stays a single LLM call and replies fast).
+  if (classification.urgency === "HIGH") {
+    emitEscalationNeeded({ conversationId, classification });
+  }
+
   emitConversationUpdated({ conversationId });
   return classification;
 }
 
-// ── auto-reply ──────────────────────────────────────────────────
+// ── auto-reply (RAG-grounded) ───────────────────────────────────
+function formatContext(
+  chunks: { title: string; content: string }[],
+): string {
+  return chunks
+    .map((c, i) => `[${i + 1}] ${c.title}: ${c.content}`)
+    .join("\n");
+}
+
 /**
- * auto-reply job: build context -> classify -> if HIGH urgency emit
- * escalation_needed and skip; otherwise draft a reply and send it as BOT.
+ * auto-reply job: build context from the last customer message via RAG,
+ * answer grounded ONLY in the retrieved knowledge base, and send the reply
+ * through the conversation's channel. HIGH urgency also raises an escalation
+ * notification, but the customer still gets an immediate answer.
  */
 export async function runAutoReplyJob(conversationId: string) {
   const messages = await getRecentMessages(conversationId, 10);
   if (messages.length === 0) return;
 
+  const last = messages[messages.length - 1];
   // Only auto-reply when the latest message is from the customer.
-  if (messages[messages.length - 1]?.direction !== "INBOUND") return;
+  if (last?.direction !== "INBOUND") return;
 
-  const classification = await classifyMessages(messages);
-  if (classification.urgency === "HIGH") {
-    emitEscalationNeeded({ conversationId, classification });
-    return;
+  // Strip quoted email reply lines for a cleaner retrieval query.
+  const question = last.body
+    .split("\n")
+    .filter((l) => !l.trim().startsWith(">"))
+    .join("\n")
+    .trim()
+    .slice(0, 500);
+
+  // RAG retrieval is local and always available, even with zero LLM quota.
+  const chunks = await retrieve(question || last.body, 3);
+  const context = formatContext(chunks);
+
+  const basePrompt = await getSystemPrompt();
+  const systemPrompt = `${basePrompt}
+
+You are a support agent for Nimbus Audio. Answer the customer's question directly and concisely using the knowledge base context below. Be helpful and specific — give the actual details (times, prices, policies) from the context. Only if the question is clearly unrelated to the context should you ask the customer for clarification. Never say you are "connecting them to a human" unless they explicitly ask for one.
+
+Knowledge base context:
+${context}`;
+
+  let reply = "";
+  try {
+    reply = (
+      await chatComplete({
+        temperature: 0.3,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Conversation so far:\n${toChatTranscript(
+              messages,
+            )}\n\nWrite the next reply to the customer. Reply with the message text only.`,
+          },
+        ],
+      })
+    ).trim();
+  } catch {
+    reply = "";
   }
 
-  const systemPrompt = await getSystemPrompt();
-  const reply = (
-    await chatComplete({
-      temperature: 0.5,
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: `Here is the recent conversation:\n\n${toChatTranscript(
-            messages,
-          )}\n\nWrite the next reply as the agent. Reply with the message text only.`,
-        },
-      ],
-    })
-  ).trim();
-  if (!reply) return;
+  // Guaranteed fallback so the customer is never ghosted when the LLM is
+  // unavailable: answer straight from the best-matching KB chunk(s).
+  if (!reply) {
+    const relevant = chunks.filter((c) => c.score > 0.2);
+    if (relevant.length > 0) {
+      // Use the top chunk, and append a second if it's also clearly relevant.
+      const parts = [relevant[0].content];
+      if (relevant[1] && relevant[1].score > 0.28) {
+        parts.push(relevant[1].content);
+      }
+      reply = `${parts.join(" ")}\n\nIs there anything else I can help you with?`;
+    } else {
+      reply =
+        "Thanks for reaching out! Could you tell me a bit more about what you need help with — orders, shipping, returns, warranty, or products?";
+    }
+  }
 
   await sendReply(conversationId, reply, "BOT");
 }
